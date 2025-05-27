@@ -1034,4 +1034,126 @@ subtest 'get_wait_still_screen_on_here_doc_input' => sub {
     is($svirt->get_wait_still_screen_on_here_doc_input({}), 0, 'wait_still_screen on here doc is not set for kvm');
 };
 
+subtest 'Test routine consoles::sshVirtsh::provide_image_vmware_in_ds' => sub {
+    # Base subdir of this test; real default is /vmfs/volumes.
+    # After test completed, all contents will be deleted.
+    my $my_test_basedir = tempdir($dir . '/tb_XXXX');
+    my $nfs_ds = 'openqa_test';
+    my $ds = 'datastore_test';
+    set_var(VIRSH_OPENQA_BASEDIR => $my_test_basedir);
+    set_var(VMWARE_DATASTORE => $ds);
+    set_var(VMWARE_NFS_DATASTORE => $nfs_ds);
+    set_var(VMWARE_NFS_DATASTORE_DEBUG => 1);
+    # VMware image files path on test host:
+    # origin path definition, like: /vmfs/volumes/openqa/hdd/img.vmdk.xz
+    my $my_test_dir = path($my_test_basedir, $nfs_ds);
+    my $my_test_dir_hdd = path($my_test_dir, 'hdd');
+    my $my_test_dir_iso = path($my_test_dir, 'iso');
+    # destination path definition, like: /vmfs/volumes/Datastore1/openQA/img.vmdk.xz
+    my $vmware_openqa_datastore = path($my_test_basedir, $ds, 'openQA');
+
+    my $svirt = consoles::sshVirtsh->new('svirt');
+    my $console_mock = Test::MockModule->new('consoles::sshVirtsh');
+
+    # SUBTESTS:
+    subtest 'vmw-test-1: static check script preparation before execution' => sub {
+        my @last_run_commands = ();
+        # image definition, object only, no file creation
+        my $input_file = path("vmware-mock-1-image.vmdk");
+        my $input_file_xz = path($input_file . '.xz');
+
+        $console_mock->redefine(run_cmd => sub ($self, $cmd, %args) {
+                push @last_run_commands, $cmd;
+                0;
+        });
+        # check script body resulting from parameters:
+        $svirt->provide_image_vmware_in_ds(path($my_test_dir_hdd, $input_file_xz), $vmware_openqa_datastore, backingfile => 1);
+        like $last_run_commands[0], qr{/hdd/$input_file_xz\s}, 'Checking image management script origin file.xz- 1a';
+        like $last_run_commands[0], qr{$vmware_openqa_datastore/$input_file\s}, 'Checking image management script destination file- 1b';
+
+        $svirt->provide_image_vmware_in_ds(path($my_test_dir_hdd, $input_file), $vmware_openqa_datastore, backingfile => 1);
+        like $last_run_commands[1], qr{/hdd/$input_file\s}, 'Checking image management script without xz- 2a';
+        like $last_run_commands[1], qr{$vmware_openqa_datastore/$input_file\s}, 'Checking image management script destination file- 2b';
+
+        $svirt->provide_image_vmware_in_ds(path($my_test_dir_iso, $input_file_xz), $vmware_openqa_datastore, backingfile => 0);
+        like $last_run_commands[2], qr{/iso/$input_file_xz\s}, 'Checking image management script with xz- 3a';
+        like $last_run_commands[2], qr{$vmware_openqa_datastore/$input_file\s}, 'Checking image management script destination file- 3b';
+
+        $svirt->provide_image_vmware_in_ds(path($my_test_dir_iso, $input_file), $vmware_openqa_datastore);
+        like $last_run_commands[3], qr{/iso/$input_file\s}, 'Checking image management script without xz- 4a';
+        like $last_run_commands[3], qr{$vmware_openqa_datastore/$input_file\s}, 'Checking image management script destination file- 4b';
+    };
+
+    subtest 'wmv-test-2: check shell script execution' => sub {
+        my @last_run_commands = ();
+        my $output;
+        # images definition
+        my $input_file = path('vmware-mock-2-image.vmdk');
+        my $input_file_xz = path($input_file . '.xz');
+        # create origin path on FS
+        $my_test_dir->make_path;
+        $my_test_dir_hdd->make_path;
+        $my_test_dir_iso->make_path;
+        # create destination path on FS
+        $vmware_openqa_datastore->make_path;
+        # origin dir: define full path file
+        my $file = path($my_test_dir, $input_file);
+        # create and fill the dummy file
+        $file->spew("VMmware-image-vmdk");
+        # compress it for next decompression tests
+        qx(xz -f --compress --keep $file);
+        my $file_xz = path($my_test_dir, $input_file_xz);
+        # check test images created
+        is((-e $file_xz), 1, "mock image $file_xz created ok.");
+        is((-e $file), 1, "mock image $file exists.");
+        # populate hdd, iso origin with vaild files.
+        my $file_i = path($file)->copy_to($my_test_dir_iso);
+        my $file_h = path($file)->copy_to($my_test_dir_hdd);
+        my $file_xz_i = path($file_xz)->copy_to($my_test_dir_iso);
+        my $file_xz_h = path($file_xz)->copy_to($my_test_dir_hdd);
+
+        $console_mock->redefine(run_cmd => sub ($self, $cmd, %args) {
+                push @last_run_commands, $cmd;
+                # run shell script in local host.
+                my $out = qx($cmd);
+                # shift needed in perl to get exit code from MSB
+                ($? >> 8);
+        });
+        # check images handling
+        # dest: pre-cleanup file in destination dir. to trigger reload
+        path($vmware_openqa_datastore, $input_file)->remove;
+        path($vmware_openqa_datastore, $input_file_xz)->remove;
+        $output = $svirt->provide_image_vmware_in_ds($input_file_xz, $vmware_openqa_datastore, backingfile => 1);
+        like $last_run_commands[0], qr{/hdd/$input_file_xz}, 'Checking image management script with xz in hdd- 5a';
+        like $output, qr{$vmware_openqa_datastore/$input_file}, 'Checking image management output with xz in hdd- 5b';
+
+        path($vmware_openqa_datastore, $input_file)->remove;
+        $output = $svirt->provide_image_vmware_in_ds($input_file, $vmware_openqa_datastore, backingfile => 1);
+        like $last_run_commands[1], qr{/hdd/$input_file}, 'Checking image management script without xz in hdd- 6a';
+        like $output, qr{$vmware_openqa_datastore/$input_file}, 'Checking image management output without xz in hdd- 6b';
+
+        path($vmware_openqa_datastore, $input_file)->remove;
+        $output = $svirt->provide_image_vmware_in_ds($input_file, $vmware_openqa_datastore, backingfile => 0);
+        like $last_run_commands[2], qr{/iso/$input_file}, 'Checking image management script without xz in iso- 7a';
+        like $output, qr{$vmware_openqa_datastore/$input_file}, 'Checking image management output without xz in iso- 7b';
+
+        path($vmware_openqa_datastore, $input_file)->remove;
+        $output = $svirt->provide_image_vmware_in_ds($input_file_xz, $vmware_openqa_datastore);
+        like $last_run_commands[3], qr{/iso/$input_file_xz}, 'Checking image management script with xz in iso- 8a';
+        like $output, qr{$vmware_openqa_datastore/$input_file}, 'Checking image management output with xz in iso- 8b';
+
+        # no cleanup, image found
+        $output = $svirt->provide_image_vmware_in_ds($input_file, $vmware_openqa_datastore);
+        like $last_run_commands[4], qr{/iso/$input_file}, 'Checking image management script without xz in iso- 9a';
+        like $output, qr{$vmware_openqa_datastore/$input_file}, 'Checking image management output without xz in iso- 9b';
+    };
+
+    # Cleanup after test
+    delete $bmwqemu::vars{VIRSH_OPENQA_BASEDIR};
+    delete $bmwqemu::vars{VMWARE_DATASTORE};
+    delete $bmwqemu::vars{VMWARE_NFS_DATASTORE};
+    delete $bmwqemu::vars{VMWARE_NFS_DATASTORE_DEBUG};
+
+};
+
 done_testing;
