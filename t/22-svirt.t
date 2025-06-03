@@ -1043,7 +1043,8 @@ subtest 'Test routine consoles::sshVirtsh::provide_image_vmware_in_ds' => sub {
     set_var(VIRSH_OPENQA_BASEDIR => $my_test_basedir);
     set_var(VMWARE_DATASTORE => $ds);
     set_var(VMWARE_NFS_DATASTORE => $nfs_ds);
-    set_var(VMWARE_NFS_DATASTORE_DEBUG => 1);
+    # set_var(VMWARE_NFS_DATASTORE_DEBUG => 1);
+
     # VMware image files path on test host:
     # origin path definition, like: /vmfs/volumes/openqa/hdd/img.vmdk.xz
     my $my_test_dir = path($my_test_basedir, $nfs_ds);

@@ -356,7 +356,7 @@ if test -e "$dest_image"; then
   echo "Waiting while $input_file is loading:";
   while (ps -x | grep -E "cp .*$baseimage|xz .*$basefile"|grep -v grep);
   do sleep 5; done;
-  [ \$\? -eq 0 ] && echo "OK: image $dest_image ready.";
+  [ \$\? -eq 0 ] || false;
 else
   if [[ "$input_file" == *.xz ]]; then 
     [ -e "$dest_image.xz" ] || cp "$file_origin" "$dest_image.xz";
